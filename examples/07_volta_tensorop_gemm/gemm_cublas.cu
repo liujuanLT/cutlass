@@ -5,7 +5,7 @@
 #include "cutlass/util/command_line.h"
 
 #ifndef CHECK_ARCH
-#define CHECK_ARCH 0
+#define CHECK_ARCH 1
 #endif
 
 #define LOG_LEVEL 1
