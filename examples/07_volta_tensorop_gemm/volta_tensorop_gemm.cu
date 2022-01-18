@@ -119,6 +119,7 @@ the output from CUTLASS kernel is same as reference GEMM kernel.
 
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/device/gemm.h"
+#include "cutlass/util/command_line.h"
 #include "cutlass/util/host_tensor.h"
 #include "cutlass/util/reference/device/gemm.h"
 #include "cutlass/util/reference/host/tensor_compare.h"
@@ -126,6 +127,24 @@ the output from CUTLASS kernel is same as reference GEMM kernel.
 #include "cutlass/util/reference/host/tensor_fill.h"
 #include "cutlass/util/tensor_view_io.h"
 #include "helper.h"
+
+/// Result structure
+struct Result {
+
+  double runtime_ms;
+  double gflops;
+  cutlass::Status status;
+  cudaError_t error;
+  bool passed;
+
+  Result(
+    double runtime_ms = 0,
+    double gflops = 0,
+    cutlass::Status status = cutlass::Status::kSuccess,
+    cudaError_t error = cudaSuccess
+  ):
+    runtime_ms(runtime_ms), gflops(gflops), status(status), error(error), passed(true) { }
+};
 
 // The code section below describes datatype for input, output matrices and computation between
 // elements in input matrices.
@@ -188,7 +207,7 @@ using Gemm = cutlass::gemm::device::Gemm<ElementInputA,
                                          SwizzleThreadBlock,
                                          NumStages>;
 
-int run() {
+int run(int m_, int k_, int n_, int iterations) {
 
   cudaDeviceProp props;
 
@@ -206,9 +225,10 @@ int run() {
     return 0;
   }
 
-  const int length_m = 5120;
-  const int length_n = 4096;
-  const int length_k = 4096;
+  int length_m = m_;
+  int length_n = n_;
+  int length_k = k_;  
+  std::cout <<"m,k,n" << length_m << ", " << length_k << "," << length_n << std::endl;
 
   // Create a tuple of problem size for matrix multiplication
   cutlass::gemm::GemmCoord problem_size(length_m, length_n, length_k);
@@ -292,9 +312,71 @@ int run() {
   status = gemm_op.initialize(arguments, workspace.get());
   CUTLASS_CHECK(status);
 
-  // Launch initialized CUTLASS kernel
-  status = gemm_op();
-  CUTLASS_CHECK(status);
+  // warmup
+  for (int iter = 0; iter < iterations; ++iter) {
+    // Launch initialized CUTLASS kernel
+    status = gemm_op();
+    CUTLASS_CHECK(status);
+  }
+
+  Result result;
+
+  cudaEvent_t events[2];
+
+  for (auto & event : events) {
+    result.error = cudaEventCreate(&event);
+    if (result.error != cudaSuccess) {
+      std::cerr << "cudaEventCreate() failed: " << cudaGetErrorString(result.error) << std::endl;
+      return -1;
+    }
+  }
+
+  // Record an event at the start of a series of GEMMs
+  result.error = cudaEventRecord(events[0]);
+  if (result.error != cudaSuccess) {
+    std::cerr << "cudaEventRecord() failed: " << cudaGetErrorString(result.error) << std::endl;
+    return -1;
+  }
+
+
+  for (int iter = 0; iter < iterations; ++iter) {
+    // Launch initialized CUTLASS kernel
+    status = gemm_op();
+    CUTLASS_CHECK(status);
+  }
+
+
+  // Record an event when the GEMMs are complete
+  result.error = cudaEventRecord(events[1]);
+  if (result.error != cudaSuccess) {
+    std::cerr << "cudaEventRecord() failed: " << cudaGetErrorString(result.error) << std::endl;
+    return -1;
+  }
+
+  // Wait for work on the device to complete.
+  result.error = cudaEventSynchronize(events[1]);
+  if (result.error != cudaSuccess) {
+    std::cerr << "cudaEventSynchronize() failed: " << cudaGetErrorString(result.error) << std::endl;
+    return -1;
+  }
+
+  // Measure elapsed runtime
+  float runtime_ms = 0;
+  result.error = cudaEventElapsedTime(&runtime_ms, events[0], events[1]);
+  if (result.error != cudaSuccess) {
+    std::cerr << "cudaEventElapsed() failed: " << cudaGetErrorString(result.error) << std::endl;
+    return -1;
+  }
+
+  // Compute average runtime and GFLOPs.
+  result.runtime_ms = double(runtime_ms) / double(iterations);
+  //result.gflops = options.gflops(result.runtime_ms / 1000.0);
+  std::cout << "total time: " << runtime_ms << " ms for " << iterations << " iters" << std::endl;
+
+  // Cleanup
+  for (auto event : events) {
+    (void)cudaEventDestroy(event);
+  }
 
   // Create instantiation for device reference gemm kernel
   cutlass::reference::device::Gemm<ElementInputA,
@@ -328,12 +410,17 @@ int run() {
     tensor_d.host_view(),
     tensor_ref_d.host_view());
 
-  std::cout << (passed ? "Passed" : "Failed") << std::endl;
-
+    if (passed) {
+      std::cout << "Runtime: " << result.runtime_ms << " ms" << std::endl;
+      std::cout << " GFLOPs: " << result.gflops << std::endl;
+    }
+  
+    std::cout << (passed ? "Passed" : "Failed") << std::endl;
+  
   return (passed ? 0  : -1);
 }
 
-int main() {
+int main(int argc, const char **argv) {
 
   // Volta Tensor Core operations exposed with mma.sync are first available in CUDA 10.1.
   //
@@ -345,7 +432,14 @@ int main() {
     return 0;
   }
   else {
-    return run();
+    cutlass::CommandLine cmd(argc, argv);
+    int m,n,k;
+    int niters = 10000;
+    cmd.get_cmd_line_argument("m", m);
+    cmd.get_cmd_line_argument("k", k);        
+    cmd.get_cmd_line_argument("n", n);
+    cmd.get_cmd_line_argument("niters", niters);
+    return run(m, k, n, niters);
   }
 }
 
