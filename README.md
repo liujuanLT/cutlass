@@ -1,4 +1,4 @@
-# cutlass
+## test by cutlass
 
 see the origin README from NVIDIA [here](https://github.com/liujuanLT/cutlass/blob/master/README_NVIDIA.md)
 
@@ -25,4 +25,27 @@ see the origin README from NVIDIA [here](https://github.com/liujuanLT/cutlass/bl
   cd build/examples/14_ampere_tf32_tensorop_gemm
   make -j4
   ./14_ampere_tf32_tensorop_gemm
+```
+
+## test by cublas
+
+### test float32 float16
+```
+vim gemm_cublas.cu 
+#define DATA_TYPE 0
+or
+#define DATA_TYPE 1
+
+ln -sf gemm_cublas.cu  volta_tensorop_gemm.cu
+
+make -j4 && ./07_volta_tensorop_gemm  --m=1024 --k=1024 --n=1024 --niters=1000 
+
+```
+
+### test int8
+```
+ln -sf gemm_cublas_ex.cu  volta_tensorop_gemm.cu
+
+make -j4 && ./07_volta_tensorop_gemm  --m=1024 --k=1024 --n=1024 --niters=1000 
+
 ```
